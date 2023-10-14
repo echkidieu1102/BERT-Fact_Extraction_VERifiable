@@ -54,6 +54,8 @@ def split_into_sentences(text: str) -> list[str]:
     sentences = text.split("<stop>")
     sentences = [s.strip() for s in sentences]
     if sentences and not sentences[-1]: sentences = sentences[:-1]
+    if sentences[-1].split().__len__()< 5:
+        return sentences[:-1]
     # sentences = re.split(r'(?<=[.!?…])\s+', text)
     return sentences
 

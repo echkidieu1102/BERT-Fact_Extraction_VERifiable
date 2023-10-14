@@ -29,6 +29,7 @@ import random
 import sys
 import json
 
+import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler, WeightedRandomSampler, ConcatDataset,
@@ -243,7 +244,7 @@ class FeverProcessor(DataProcessor):
         return ['SUPPORTED', 'REFUTED', 'NEI']
     
     def get_info_eval(self, example):
-        return example.claim_id, example.num_sentence, example.evidence
+        return example.claim_id, example.num_sentence, example.claim, example.evidence
 
     def _create_examples_train(self, lines, set_type):
         """Creates examples for the training set."""
@@ -888,7 +889,7 @@ def main():
         train_examples_pos = processor.get_train_pos_examples(args.data_dir)
         train_examples_neg = processor.get_train_neg_examples(args.data_dir)
         train_examples_pos=train_examples_pos[0:100] #debugging
-        train_examples_neg=train_examples_neg[0:500] #debugging
+        train_examples_neg=train_examples_neg[0:100] #debugging
         num_train_optimization_steps = int(
             len(train_examples_pos) / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
         
@@ -1093,25 +1094,6 @@ def main():
             print('training_loss~=',tr_loss/nb_tr_steps)
             print(acc_and_f1(preds=label_pred, labels=label_true))
 
-    if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        # Save a trained model, configuration and tokenizer
-        model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
-
-        # If we save using the predefined names, we can load using `from_pretrained`
-        output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
-        output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
-
-        torch.save(model_to_save.state_dict(), output_model_file)
-        model_to_save.config.to_json_file(output_config_file)
-        tokenizer.save_vocabulary(args.output_dir)
-
-        # Load a trained model and vocabulary that you have fine-tuned
-        model = AutoModelForSequenceClassification.from_pretrained(args.output_dir, num_labels=num_labels)
-        tokenizer = AutoTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
-    else:
-        model = AutoModelForSequenceClassification.from_pretrained(args.bert_model, num_labels=num_labels)
-    model.to(device)
-
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         eval_examples = processor.get_dev_examples(args.data_dir)
         eval_examples=eval_examples[0:100] #debugging
@@ -1134,8 +1116,9 @@ def main():
         eval_loss = 0
         nb_eval_steps = 0
         # preds = []
-        label_pred = []
-        label_true = []
+        preds = []
+        labels = []
+        probs = []
         store_output=list()
         # softmaxing=torch.nn.Softmax()
         for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader, desc="Evaluating"):
@@ -1146,18 +1129,61 @@ def main():
 
             with torch.no_grad():
                 # output_logits = model(input_ids, segment_ids, input_mask, labels=None)
-                output_logits = model(input_ids=input_ids, token_type_ids=None, attention_mask=input_mask, labels=label_ids)
+                output_logits = model(input_ids=input_ids, token_type_ids=None, attention_mask=input_mask, labels=None)
                 # logits=softmaxing(logits)
                 store_output.extend(output_logits.logits.cpu().numpy())
-                probs = torch.nn.functional.softmax(output_logits.logits, dim=-1)
+                prob_in_batch = torch.nn.functional.softmax(output_logits.logits, dim=-1)
 
                 # Chọn nhãn với xác suất cao nhất
-                _, pred = torch.max(probs, dim=-1)
-                label_pred.extend(pred.cpu().numpy())
-                label_true.extend(label_ids.cpu().numpy())
-        print(acc_and_f1(preds=label_pred, labels=label_true))
+                prob, pred = torch.max(prob_in_batch, dim=-1)
+                preds.extend(pred.cpu().numpy())
+                labels.extend(label_ids.cpu().numpy())
+                probs.extend(prob.cpu().numpy())
+        print(acc_and_f1(preds=preds, labels=labels))
 
         print("Storing dev scores")
+        claim_ids = []
+        num_sentences = []
+        claims =[]
+        evidences = []
+        for example in eval_examples:
+            claim_id, num_sentence, claim, evidence = processor.get_info_eval(example)
+            claim_ids.append(claim_id)
+            num_sentences.append(num_sentence)
+            claims.append(claim)
+            evidences.append(evidence)
+        
+        data = {
+            "claim_id": claim_ids,
+            "num_sentence": num_sentences,
+            "claim": claims,
+            "evidence": evidences,
+            "pred": preds,
+            "label": labels,
+            "prob": probs
+        }
+        eval_df = pd.DataFrame(data=data)
+        eval_df.to_json(os.path.join(args.output_dir,"eval.json"), force_ascii=False, indent=4, orient='index')
+
+
+    if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
+        # Save a trained model, configuration and tokenizer
+        model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+
+        # If we save using the predefined names, we can load using `from_pretrained`
+        output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
+        output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
+
+        torch.save(model_to_save.state_dict(), output_model_file)
+        model_to_save.config.to_json_file(output_config_file)
+        tokenizer.save_vocabulary(args.output_dir)
+
+        # Load a trained model and vocabulary that you have fine-tuned
+        model = AutoModelForSequenceClassification.from_pretrained(args.output_dir, num_labels=num_labels)
+        tokenizer = AutoTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+    else:
+        model = AutoModelForSequenceClassification.from_pretrained(args.bert_model, num_labels=num_labels)
+    model.to(device)
         # pickle_in = open(args.output_dir + 'scores.p', 'wb')
         # pickle.dump(store_output,pickle_in)
         # pickle_in.close()
