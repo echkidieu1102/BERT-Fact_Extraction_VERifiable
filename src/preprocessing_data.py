@@ -86,29 +86,72 @@ def process_data(df):
     df.reset_index(inplace=True, drop=True)
     return df
 
-def create_train_pos(df):
+
+# FILTER NON_EVIDENCE AND EVIDENCE
+def create_evidence(df_copy):
+    df = df_copy.__deepcopy__()
+    df = df[df.apply(lambda row: evidence_isIn_sentence(row), axis=1)]
+    df.reset_index(inplace=True, drop=True)
+    df.loc[:,"verdict"] = "SR"
+    df = df.loc[:,["id_sentence", "sentence", "claim", "verdict", "domain"]]
+    return df
+
+def create_non_evidence(df_copy):
+    df = df_copy.__deepcopy__()
+    df = df[~df.apply(lambda row: evidence_isIn_sentence(row), axis=1)]
+    df.loc[:, "verdict"] = "NON"
+    df.reset_index(inplace=True, drop=True)
+    df = df.loc[:,["id_sentence", "sentence", "claim", "verdict", "domain"]]
+    return df
+
+def create_evidence_dev(df_copy):
+    df = df_copy.__deepcopy__()
+    dev_neg_df = df[~df.apply(lambda row: evidence_isIn_sentence(row), axis=1)]
+    df.loc[:,"verdict"] = "SR"
+    df.loc[df.id_sentence.isin(dev_neg_df.id_sentence),"verdict"] = "NON"
+    df = df.sample(frac=1).reset_index(drop=True)
+    df = df.loc[:,["id_sentence", "id", "num_sentence", "sentence", "claim", "domain", "verdict"]]
+    return df
+
+
+# FILTER SUPPORTED AND REFUTED
+
+def create_sr(df_copy):
+    df = df_copy.__deepcopy__()
     df = df[df.apply(lambda row: evidence_isIn_sentence(row), axis=1)]
     df.reset_index(inplace=True, drop=True)
     df = df.loc[:,["id_sentence", "sentence", "claim", "verdict", "domain"]]
     return df
 
-def create_train_neg(df):
-    df = df[~df.apply(lambda row: evidence_isIn_sentence(row), axis=1)]
-    df.loc[:, "verdict"] = "NEI"
+def create_sup(sr_df):
+    df = sr_df[sr_df.verdict == "SUPPORTED"]
     df.reset_index(inplace=True, drop=True)
     df = df.loc[:,["id_sentence", "sentence", "claim", "verdict", "domain"]]
     return df
 
-def create_dev(df):
-    dev_neg_df = df[~df.apply(lambda row: evidence_isIn_sentence(row), axis=1)]
-    df.loc[df.id_sentence.isin(dev_neg_df.id_sentence),"verdict"] = "NEI"
-    return df.loc[:,["id_sentence", "id", "num_sentence", "sentence", "claim", "domain", "verdict"]]
+def create_refuted(sr_df):
+    df = sr_df[sr_df.verdict == "REFUTED"]
+    df.reset_index(inplace=True, drop=True)
+    df = df.loc[:,["id_sentence", "sentence", "claim", "verdict", "domain"]]
+    return df
+
+def create_sentence_sr_dev(val_df):
+    df = val_df[val_df.apply(lambda row: evidence_isIn_sentence(row), axis=1)]
+    df = df.sample(frac=1).reset_index(drop=True)
+    df = df.loc[:,["id_sentence", "id", "num_sentence", "sentence", "claim", "domain", "verdict"]]
+    return df
 
 
-def write_data(output_dir, train_pos_df, train_neg_df, dev_df):
-    train_pos_df.to_json(os.path.join(output_dir, "train_pos_sentences.json"), force_ascii=False, indent=4, orient='index')
-    train_neg_df.to_json(os.path.join(output_dir, "train_neg_sentences.json"), force_ascii=False, indent=4,orient='index')
-    dev_df.to_json(os.path.join(output_dir, "dev_sentences.json"), force_ascii=False, indent=4,orient='index')
+def write_data_classifier_evidence(output_dir, train_evidence_df, train_non_evidence_df, dev_evidence_df):
+    train_evidence_df.to_json(os.path.join(output_dir, "train_evidence.json"), force_ascii=False, indent=4, orient='index')
+    train_non_evidence_df.to_json(os.path.join(output_dir, "train_non_evidence.json"), force_ascii=False, indent=4,orient='index')
+    dev_evidence_df.to_json(os.path.join(output_dir, "dev_classifier_evidence.json"), force_ascii=False, indent=4,orient='index')
+
+
+def write_data_claim_verification(output_dir, train_sup_df, train_refured_df, dev_sr_df):
+    train_sup_df.to_json(os.path.join(output_dir, "train_sup_sentences.json"), force_ascii=False, indent=4, orient='index')
+    train_refured_df.to_json(os.path.join(output_dir, "train_refuted_sentences.json"), force_ascii=False, indent=4,orient='index')
+    dev_sr_df.to_json(os.path.join(output_dir, "dev_sentences.json"), force_ascii=False, indent=4,orient='index')
 
 
 def main():
@@ -124,7 +167,7 @@ def main():
                         type=str,
                         help="The output data dir where data has been converted to fit for running the model.")
     parser.add_argument("--data_splitting",
-                    default=False,
+                    default=True,
                     # action='store_true',
                     help="Data splitting. True: train set, test set and validation set. False: train set, validation set")
     args = parser.parse_args()
@@ -136,22 +179,38 @@ def main():
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                         datefmt='%m/%d/%Y %H:%M:%S',
                         level=logging.INFO)
-    logger.info("******Convert data******")
+    logger.info("=============== EVIDENCE DATA ===============")
     df = read_data(args.data_dir)
 
     train_df, val_df = train_test_split(df, train_size=0.7, random_state=42)
     if args.data_splitting:
-        val_df, test_df = train_test_split(val_df, train_size=0.5, random_state=42)
+        val_df, test_df = train_test_split(val_df, train_size=0.7, random_state=42)
     train_df = process_data(train_df)
-    train_pos_df = create_train_pos(train_df)
-    train_neg_df = create_train_neg(train_df)
-
     val_df = process_data(val_df)
-    val_df = create_dev(val_df)
+    
+    # CREATE DATASETS EVIDENCE AND NON-EVIDENCE
+    train_evidence_df = create_evidence(train_df)
+    train_non_evidence_df = create_non_evidence(train_df)
 
-    write_data(args.output_dir, train_pos_df=train_pos_df, train_neg_df=train_neg_df, dev_df= val_df)
-    logger.info(f"Train sets done: \n\tTrain positive examples:{train_pos_df.shape}\n\tTrain negative examples:{train_neg_df.shape}")
-    logger.info(f"Validation set done: {val_df.shape}")
+    dev_evidence_df = create_evidence_dev(val_df)
+
+    write_data_classifier_evidence(args.output_dir, train_evidence_df=train_evidence_df, train_non_evidence_df=train_non_evidence_df, dev_evidence_df= dev_evidence_df)
+
+    logger.info(f"Train classifier evidence sets done: \n\tTrain evidence examples:{train_evidence_df.shape}\n\tTrain non-evidence examples:{train_non_evidence_df.shape}")
+    logger.info(f"Validation set done: {dev_evidence_df.shape}")
+    
+    logger.info("=============== SUPPORTED AND REFUTED DATA ===============")
+    # CREATE DATASETS SUPPORTED AND REFUTED
+
+    sr_df = create_sr(train_df)
+    train_sup_df = create_sup(sr_df)
+    train_ref_df = create_refuted(sr_df)
+    dev_sr_df = create_sentence_sr_dev(val_df)
+
+    write_data_claim_verification(args.output_dir, train_sup_df=train_sup_df, train_refured_df=train_ref_df, dev_sr_df= dev_sr_df)
+
+    logger.info(f"Train supported-refuted sets done: \n\tTrain supported examples:{train_sup_df.shape}\n\tTrain refuted examples:{train_ref_df.shape}")
+    logger.info(f"Validation set done: {dev_sr_df.shape}")
 
     if args.data_splitting:
         test_df.to_json(os.path.join(args.output_dir, "test.json"), force_ascii=False, indent=4,orient='index')
