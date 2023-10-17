@@ -6,14 +6,12 @@ import argparse
 import logging
 from sklearn.model_selection import train_test_split
 
-alphabets= "([A-Za-z])"
-prefixes = "(Mr|St|Mrs|Ms|Dr)[.]"
-suffixes = "(Inc|Ltd|Jr|Sr|Co)"
-starters = "(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)"
-acronyms = "([A-Z][.][A-Z][.](?:[A-Z][.])?)"
-websites = "[.](com|net|org|io|gov|edu|me)"
+Academic_degree = "(TTƯT|PGS|TS|BS|ThS|CKII|CKI|GS)"
+Middle_Name = "(St|G|J|W|R|E|L|T|N|U)"
 digits = "([0-9])"
 multiple_dots = r'\.{2,}'
+alphabets= "([A-Za-z])"
+Upper_alphabets = "([A-Z])"
 
 logger = logging.getLogger(__name__)
 
@@ -28,35 +26,31 @@ def read_data(data_dir):
 
 def split_into_sentences(text: str) -> list[str]:
     text = " " + text + "  "
-    text = text.replace("\n"," ")
-    text = re.sub(prefixes,"\\1<prd>",text)
-    text = re.sub(websites,"<prd>\\1",text)
+    # replace sentence contain \n\n latest to ""
+    text = re.sub(r"\n\n(?!.*\n\n).*", "", text)
+    # convert stop with "dot + space"
     text = re.sub(digits + "[.]" + digits,"\\1<prd>\\2",text)
-    text = re.sub(multiple_dots, lambda match: "<prd>" * len(match.group(0)) + "<stop>", text)
-    if "Ph.D" in text: text = text.replace("Ph.D.","Ph<prd>D<prd>")
-    text = re.sub("\s" + alphabets + "[.] "," \\1<prd> ",text)
-    text = re.sub(acronyms+" "+starters,"\\1<stop> \\2",text)
-    text = re.sub(alphabets + "[.]" + alphabets + "[.]" + alphabets + "[.]","\\1<prd>\\2<prd>\\3<prd>",text)
-    text = re.sub(alphabets + "[.]" + alphabets + "[.]","\\1<prd>\\2<prd>",text)
-    text = re.sub(" "+suffixes+"[.] "+starters," \\1<stop> \\2",text)
-    text = re.sub(" "+suffixes+"[.]"," \\1<prd>",text)
-    text = re.sub(" " + alphabets + "[.]"," \\1<prd>",text)
-    if "”" in text: text = text.replace(".”","<prd>”. ")
-    if "\"" in text: text = text.replace(".\"","<prd>\". ")
-    # if "!" in text: text = text.replace("!\"","<ellipsis>\". ")
-    # if "?" in text: text = text.replace("?\"","<qm>\". ")
+    text = re.sub(multiple_dots, lambda match: "<prd>" * len(match.group(0)), text)
+
+    # 
+    text = text.replace("TP.", "TP<prd>")
+    text = text.replace("Tp.", "Tp<prd>")
+    text = text.replace("HCM.", "HCM<stop>")
+    text = re.sub(alphabets + "[.]" + alphabets + "[.]" + alphabets + "[.]", "\\1<prd>\\2<prd>\\3<prd>",text)
+    text = re.sub(alphabets + "[.]" + alphabets + "[.]", "\\1<prd>\\2<prd>",text)
+    # text = re.sub(alphabets + "[.]" + alphabets , "\\1<prd>\\2",text)
+    text = re.sub(Academic_degree+"[.]", " \\1<prd>",text)
+    text = re.sub(Middle_Name + "[.]", " \\1<prd>",text)
+    # text = re.sub(Upper_alphabets + "[.]", " \\1<prd>", text )
+    #     
+    # text = text.replace(".\n\n", "<stop> \n\n")
     text = text.replace(". ",".<stop>")
-    # text = text.replace("?","?<stop>")
-    # text = text.replace("!","!<stop>")
     text = text.replace("<prd>",".")
-    # text = text.replace("<ellipsis>","!")
-    # text = text.replace("<qm>","?")
+
+    # split sentence
     sentences = text.split("<stop>")
     sentences = [s.strip() for s in sentences]
     if sentences and not sentences[-1]: sentences = sentences[:-1]
-    if sentences[-1].split().__len__()< 5:
-        return sentences[:-1]
-    # sentences = re.split(r'(?<=[.!?…])\s+', text)
     return sentences
 
 def preprocess_text(text: str) -> str:
@@ -220,3 +214,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

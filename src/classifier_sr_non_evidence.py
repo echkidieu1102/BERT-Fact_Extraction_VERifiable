@@ -37,22 +37,19 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler, Weig
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
+import torch
+import torch.nn as nn
 from torch.nn import CrossEntropyLoss, MSELoss, BCELoss
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import matthews_corrcoef,accuracy_score, f1_score
 
 import transformers
 from transformers import RobertaForSequenceClassification, RobertaConfig, BertTokenizer
-from transformers import AutoModel, AutoTokenizer
 from transformers import PYTORCH_PRETRAINED_BERT_CACHE, WEIGHTS_NAME, CONFIG_NAME
-from transformers import AdamW, get_linear_schedule_with_warmup
-
-from fairseq.models.roberta import RobertaModel
-from fairseq.data.encoders.fastbpe import fastBPE
-from fairseq.data import Dictionary
-# from transformers.modeling_utils import *
 from transformers import AdamW, get_linear_schedule_with_warmup, get_constant_schedule
 from transformers import AutoModel, AutoTokenizer, AutoModelForTokenClassification, AutoModelForSequenceClassification
+from transformers import RobertaModel
+
 
 
 # from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE, WEIGHTS_NAME, CONFIG_NAME
@@ -62,12 +59,11 @@ from transformers import AutoModel, AutoTokenizer, AutoModelForTokenClassificati
 
 logger = logging.getLogger(__name__)
 
-
 # INPUT EXAMPLE
 class InputExample_train(object):
     """A single training example for simple sequence classification."""
 
-    def __init__(self, 
+    def __init__(self,
                  guid,
                  evidence,
                  claim,
@@ -77,7 +73,7 @@ class InputExample_train(object):
 
         Args:
             guid: Unique id for the example.
-            evidence (string): The 
+            evidence (string): The
             claim: (Optional) string. The untokenized text of the second sequence.
             Only must be specified for sequence pair tasks.
             label: (Optional) string. The label of the example. This should be
@@ -92,7 +88,7 @@ class InputExample_train(object):
 class InputExample_dev(object):
     """A single developer example for simple sequence classification."""
 
-    def __init__(self, 
+    def __init__(self,
                  guid,
                  claim_id,
                  num_sentence,
@@ -104,7 +100,7 @@ class InputExample_dev(object):
 
         Args:
             guid: Unique id for the example.
-            evidence (string): The 
+            evidence (string): The
             claim: (Optional) string. The untokenized text of the second sequence.
             Only must be specified for sequence pair tasks.
             label: (Optional) string. The label of the example. This should be
@@ -129,7 +125,7 @@ class InputFeatures_train(object):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
-    
+
         self.label_id = label_id
         self.guid = guid
 
@@ -181,7 +177,7 @@ class DataProcessor(object):
                     line = list(unicode(cell, 'utf-8') for cell in line)
                 lines.append(line)
             return lines
-        
+
     @classmethod
     def _read_json(cls, input_file):
         lines = []
@@ -214,7 +210,7 @@ class FeverProcessor(DataProcessor):
     def get_labels(self):
         """See base class."""
         return ["SR", "NON"]
-    
+
     def get_info_eval(self, example):
         return example.guid, example.claim_id, example.num_sentence, example.claim, example.evidence
 
@@ -230,7 +226,7 @@ class FeverProcessor(DataProcessor):
             examples.append(
                 InputExample_train(guid=guid, evidence=evidence, claim=claim, label=label,domain=domain))
         return examples
-        
+
     def _create_examples_dev(self, lines, set_type):
         """Creates examples for the dev set and test set."""
         examples = []
@@ -259,25 +255,25 @@ def convert_examples_to_features_train(examples,
 
     features = []
     for (ex_index, example) in enumerate(tqdm(examples, desc="Writing Example Train")):
-        if ex_index % 100 == 0:
+        # if ex_index % 100 == 0:
             # logger.info(f"\nHERE:\t{example.guid}")
         #     logger.info("Writing example %d of %d" % (ex_index, len(examples)))
 
-            tokens_a = tokenizer.tokenize(example.evidence)
+        tokens_a = tokenizer.tokenize(example.evidence)
 
-            tokens_b = None
+        tokens_b = None
 
-            tokens_domain = tokenizer.tokenize(example.domain)
+        tokens_domain = tokenizer.tokenize(example.domain)
 
-            # add domain 
-            tokens_a = tokens_domain + tokens_a
+        # add domain
+        tokens_a = tokens_domain + tokens_a
 
         if example.claim:
             tokens_b = tokenizer.tokenize(example.claim)
             # Modifies `tokens_a` and `tokens_b` in place so that the total
             # length is less than the specified length.
             # Account for [CLS], [SEP], [SEP] with "- 3"
-            _truncate_seq_pair(tokens_a, tokens_b, max_seq_length - 3)
+            _truncate_seq_pair(tokens_a, tokens_b, max_seq_length - 4)
         else:
             # Account for [CLS] and [SEP] with "- 2"
             if len(tokens_a) > max_seq_length - 2:
@@ -301,11 +297,13 @@ def convert_examples_to_features_train(examples,
         # For classification tasks, the first vector (corresponding to [CLS]) is
         # used as as the "sentence vector". Note that this only makes sense because
         # the entire model is fine-tuned.
-        tokens = ["[CLS]"] + tokens_a + ["[SEP]"]
+        # tokens = ["[CLS]"] + tokens_a + ["[SEP]"]
+        tokens = ["<s>"] + tokens_a + ["</s>"] + ["</s>"]
         segment_ids = [0] * len(tokens)
 
         if tokens_b:
-            tokens += tokens_b + ["[SEP]"]
+            # tokens += tokens_b + ["[SEP]"]
+            tokens += tokens_b + ["</s>"]
             segment_ids += [1] * (len(tokens_b) + 1)
 
         input_ids = tokenizer.convert_tokens_to_ids(tokens)
@@ -372,9 +370,9 @@ def convert_examples_to_features_eval(examples,
 
         tokens_domain = tokenizer.tokenize(example.domain)
 
-        # add domain 
+        # add domain
         tokens_a = tokens_domain + tokens_a
-            
+
         if example.claim:
             tokens_b = tokenizer.tokenize(example.claim)
             # Modifies `tokens_a` and `tokens_b` in place so that the total
@@ -500,6 +498,48 @@ def pearson_and_spearman(preds, labels):
         "corr": (pearson_corr + spearman_corr) / 2,
     }
 
+
+# CUSTOM MODEL
+class CustomRobertaClassificationHead(nn.Module):
+    def __init__(self, hidden_size, num_labels):
+        super(CustomRobertaClassificationHead, self).__init__()
+        self.dense = nn.Linear(768, 768)
+        self.dropout = nn.Dropout(p=0.1)
+        self.lstm = nn.LSTM(input_size=hidden_size, hidden_size=256, batch_first=True)
+        self.fc1 = nn.Linear(256, 128)
+        self.out_proj = nn.Linear(128, num_labels)
+
+    def forward(self, hidden_states):
+        x = self.dense(hidden_states)  # Ánh xạ hidden_states qua lớp tuyến tính dense
+        x = torch.relu(x)  # Áp dụng hàm kích hoạt ReLU
+        x = self.dropout(x)  # Áp dụng dropout
+        _, (h_n, _) = self.lstm(x)  # Đưa x qua LSTM và lấy hidden state cuối cùng
+        x = self.fc1(h_n[-1])
+        x = self.out_proj(x)
+
+        return x
+
+class CustomRobertaForSequenceClassification(nn.Module):
+    def __init__(self, model, num_labels):
+        super(CustomRobertaForSequenceClassification, self).__init__()
+
+        self.roberta = model
+        self.roberta.classifier = CustomRobertaClassificationHead(hidden_size=768, num_labels=num_labels)
+
+    def forward(self, input_ids, token_type_ids, attention_mask, labels):
+        outputs = self.roberta(input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask, labels=labels)
+        return outputs
+
+    # def save_pretrained(self, PATH):
+    #    # Create the directory if it doesn't exist
+    #   os.makedirs(PATH, exist_ok=True)
+
+    #   # Save the model's state_dict to a file
+    #   model_path = os.path.join(PATH, 'model.bin')
+    #   torch.save(self.state_dict(), model_path)
+
+
+# MAIN
 def main():
     parser = argparse.ArgumentParser()
 
@@ -652,7 +692,7 @@ def main():
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
         raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
-    
+
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
@@ -666,7 +706,7 @@ def main():
 
     label_list = processor.get_labels()
     num_labels = len(label_list)
-    
+
     tokenizer = AutoTokenizer.from_pretrained(args.bert_model, use_fast=False)
     # tokenizer = AutoTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
@@ -675,11 +715,11 @@ def main():
     if args.do_train:
         train_examples_pos = processor.get_train_pos_examples(args.data_dir)
         train_examples_neg = processor.get_train_neg_examples(args.data_dir)
-        train_examples_pos=train_examples_pos[0:200] #debugging
-        train_examples_neg=train_examples_neg[0:400] #debugging
+        train_examples_pos=train_examples_pos[0:500] #debugging
+        train_examples_neg=train_examples_neg[0:1000] #debugging
         num_train_optimization_steps = int(
             len(train_examples_pos) / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
-        
+
         # logger.info(f"\nNum Train Optimization Steps: {num_train_optimization_steps}\n")
 
         if args.losstype == 'cross_entropy_concat' or args.losstype == 'hinge_loss_concat':
@@ -691,7 +731,7 @@ def main():
     # Prepare model
     cache_dir = args.cache_dir if args.cache_dir else os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE),
                                                                    'distributed_{}'.format(args.local_rank))
-    
+
 
 
     model = AutoModelForSequenceClassification.from_pretrained(args.bert_model,
@@ -699,6 +739,7 @@ def main():
                                                           num_labels=num_labels,
                                                           from_tf=False)
 
+    model = CustomRobertaForSequenceClassification(model=model, num_labels=num_labels)
 
     if args.fp16:
         model.half()
@@ -721,7 +762,7 @@ def main():
         {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
         {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
-    
+
     optimizer = AdamW(optimizer_grouped_parameters,
                         lr=args.learning_rate)
 
@@ -809,7 +850,7 @@ def main():
                 label_ids_cat=torch.cat([label_ids.view(-1), label_ids_neg.view(-1)], dim = 0)
 
                 with torch.no_grad():
-                    output_logits = model(input_ids=input_ids_cat, token_type_ids=None, attention_mask=input_mask_cat, labels=label_ids_cat)
+                    output_logits = model(input_ids=input_ids_cat, token_type_ids=None, attention_mask=input_mask_cat, labels=None)
 
                 if output_mode == "classification":
                     loss_fct = CrossEntropyLoss()
@@ -823,13 +864,14 @@ def main():
                         NON_index = label_ids_cat.view(-1) == 1
                         SR_index = label_ids_cat.view(-1) != 1
                         Pos_numbers = SR_index.sum()
+                        # Pos_numbers = 8
 
                         TOP_K, Hard_NON_index = loss[NON_index].topk(Pos_numbers)
                         # loss = torch.cat([loss[SR_index], TOP_K])    #uncomment if dont want to use no-grad then grad
 
                         #comment if dont want to use no-grad then grad
                         IDS = torch.cat([torch.tensor(range(0,Pos_numbers),device=device), Pos_numbers+Hard_NON_index], dim=0).to(torch.int32)
-                        output_logits = model(input_ids=input_ids_cat[IDS, :], attention_mask=input_mask_cat[IDS, :], labels=label_ids_cat[IDS])
+                        output_logits = model(input_ids=input_ids_cat[IDS, :], token_type_ids=None, attention_mask=input_mask_cat[IDS, :], labels=None)
 
                         # Compute loss, evaluation
                         probs = torch.nn.functional.softmax(output_logits.logits, dim=-1)
@@ -902,7 +944,7 @@ def main():
 
             with torch.no_grad():
                 # output_logits = model(input_ids, segment_ids, input_mask, labels=None)
-                output_logits = model(input_ids=input_ids, token_type_ids=None, attention_mask=input_mask, labels=label_ids)
+                output_logits = model(input_ids=input_ids, token_type_ids=None, attention_mask=input_mask, labels=None)
                 # logits=softmaxing(logits)
                 store_output.extend(output_logits.logits.cpu().numpy())
                 prob_in_batch = torch.nn.functional.softmax(output_logits.logits, dim=-1)
@@ -927,7 +969,7 @@ def main():
             num_sentences.append(num_sentence)
             claims.append(claim)
             evidences.append(evidence)
-        
+
         data = {
             "claim_id": claim_ids,
             "num_sentence": num_sentences,
@@ -950,12 +992,12 @@ def main():
         output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
 
         torch.save(model_to_save.state_dict(), output_model_file)
-        model_to_save.config.to_json_file(output_config_file)
+        # model_to_save.config.to_json_file(output_config_file)
         tokenizer.save_vocabulary(args.output_dir)
 
         # Load a trained model and vocabulary that you have fine-tuned
-        model = AutoModelForSequenceClassification.from_pretrained(args.output_dir, num_labels=num_labels)
-        tokenizer = AutoTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+        # model = AutoModelForSequenceClassification.from_pretrained(args.output_dir, num_labels=num_labels)
+        # tokenizer = AutoTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
     else:
         model = AutoModelForSequenceClassification.from_pretrained(args.bert_model, num_labels=num_labels)
     model.to(device)
