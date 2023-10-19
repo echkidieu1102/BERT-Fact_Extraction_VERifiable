@@ -16,9 +16,9 @@ Upper_alphabets = "([A-Z])"
 logger = logging.getLogger(__name__)
 
 def read_data(data_dir):
-    warmup_df = pd.read_json(os.path.join(data_dir, "ise-dsc01-warmup.json"), orient="index")
-    train_df = pd.read_json(os.path.join(data_dir, "ise-dsc01-train.json"), orient="index")
-    df = pd.concat([warmup_df, train_df], axis=0)
+    # warmup_df = pd.read_json(os.path.join(data_dir, "ise-dsc01-warmup.json"), orient="index")
+    df = pd.read_json(os.path.join(data_dir, "ise-dsc01-train.json"), orient="index")
+    # df = pd.concat([warmup_df, train_df], axis=0)
     df.insert(loc=0, column="id", value=df.index.values)
     df.reset_index(inplace=True, drop=True)
     return df
@@ -27,9 +27,19 @@ def read_data(data_dir):
 def split_into_sentences(text: str) -> list[str]:
     text = " " + text + "  "
     # replace sentence contain \n\n latest to ""
-    text = re.sub(r"\n\n(?!.*\n\n).*", "", text)
+    text = re.sub(r"\n\n(?!.*\n\n)", "<check>", text)
+    sentences = text.split("<check>")
+
+    if len(sentences[-1].split())<6:
+        text = sentences[0]
+    else:
+        text = "\n\n".join(sentences)
     # convert stop with "dot + space"
     text = re.sub(digits + "[.]" + digits,"\\1<prd>\\2",text)
+    text = text.replace("...\n\n", "...<stop> \n\n")
+    text = text.replace("…\n\n", "…<stop> \n\n")
+    
+    
     text = re.sub(multiple_dots, lambda match: "<prd>" * len(match.group(0)), text)
 
     # 
@@ -38,12 +48,11 @@ def split_into_sentences(text: str) -> list[str]:
     text = text.replace("HCM.", "HCM<stop>")
     text = re.sub(alphabets + "[.]" + alphabets + "[.]" + alphabets + "[.]", "\\1<prd>\\2<prd>\\3<prd>",text)
     text = re.sub(alphabets + "[.]" + alphabets + "[.]", "\\1<prd>\\2<prd>",text)
-    # text = re.sub(alphabets + "[.]" + alphabets , "\\1<prd>\\2",text)
-    text = re.sub(Academic_degree+"[.]", " \\1<prd>",text)
+    text = re.sub(Academic_degree + "[.]", " \\1<prd>",text)
     text = re.sub(Middle_Name + "[.]", " \\1<prd>",text)
-    # text = re.sub(Upper_alphabets + "[.]", " \\1<prd>", text )
+    text = re.sub(Upper_alphabets + "[.]", " \\1<prd>", text )
     #     
-    # text = text.replace(".\n\n", "<stop> \n\n")
+    text = text.replace(".\n\n", "<stop> \n\n")
     text = text.replace(". ",".<stop>")
     text = text.replace("<prd>",".")
 
@@ -63,12 +72,10 @@ def preprocess_text(text: str) -> str:
     return None
 
 def evidence_isIn_sentence (row):
-    if (row['evidence'] is not None):
-        if row['evidence'] in row['sentence']:
-            return True
-        else:
-            return False
-    return False
+    if pd.isnull(row['evidence']):
+        return False
+    else:
+        return (row['sentence'] in row['evidence']) | (row['evidence'] in row['sentence'])
 
 def process_data(df):
     df.insert(loc=2, column="sentence", value=df.context.apply(split_into_sentences))
@@ -100,7 +107,7 @@ def create_non_evidence(df_copy):
 
 def create_evidence_dev(df_copy):
     df = df_copy.__deepcopy__()
-    dev_neg_df = df[~df.apply(lambda row: evidence_isIn_sentence(row), axis=1)]
+    dev_neg_df = df[~df.apply(evidence_isIn_sentence, axis=1)]
     df.loc[:,"verdict"] = "SR"
     df.loc[df.id_sentence.isin(dev_neg_df.id_sentence),"verdict"] = "NON"
     df = df.sample(frac=1).reset_index(drop=True)
@@ -214,4 +221,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
